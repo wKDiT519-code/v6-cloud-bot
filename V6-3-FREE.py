@@ -1,7 +1,7 @@
 import requests, os, time, threading
 from flask import Flask
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "V95_KD_bot").strip()
+BOT_TOKEN = os.environ.get("V95_KD_bot", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 SYMBOL = "PAXGUSDT"
 
