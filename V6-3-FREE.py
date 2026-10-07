@@ -6,7 +6,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 SYMBOL = "PAXGUSDT"
 INTERVAL = "15m"
-BINANCE_URL = "https://api.binance.com/api/v3"
+# เปลี่ยนเป็น FUTURES API เป๊ะๆ
+BINANCE_FAPI = "https://fapi.binance.com/fapi/v1"
 RENDER_URL = "https://v6-cloud-bot-1.onrender.com"
 
 app = Flask(__name__)
@@ -29,14 +30,14 @@ stats = {
 @app.route('/')
 def home():
     winrate = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
-    return f"V6.3 FINAL LINKS LIVE | {SYMBOL} | Trades:{stats['total_trades']} PnL:{stats['total_pnl_pct']:+.2f}% WR:{winrate:.1f}% | <a href='/stats'>stats</a> <a href='/pnl'>pnl</a>"
+    return f"V6.3 FUTURES PRICE LIVE | {SYMBOL} {INTERVAL} FUTURES | Trades:{stats['total_trades']} PnL:{stats['total_pnl_pct']:+.2f}% WR:{winrate:.1f}% | <a href='/stats'>stats</a> <a href='/pnl'>pnl</a>"
 
 @app.route('/stats')
 def stats_page():
     winrate = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     avg = stats["total_pnl_pct"]/stats["total_trades"] if stats["total_trades"]>0 else 0
     hist = "<br>".join([f"{h['time']} {h['type']} {h['pnl']:+.2f}%" for h in stats["history"][-20:]])
-    return f"<h2>📊 PAXGUSDT V6.3</h2>Trades:{stats['total_trades']} Wins:{stats['wins']} Losses:{stats['losses']} WR:{winrate:.1f}%<br>Total:{stats['total_pnl_pct']:+.2f}% Avg:{avg:+.2f}%<br>Best:{stats['best_trade']:+.2f}% Worst:{stats['worst_trade']:+.2f}%<br><hr>{hist}"
+    return f"<h2>📊 PAXGUSDT FUTURES V6.3</h2>Price: FUTURES (fapi.binance.com)<br>Trades:{stats['total_trades']} Wins:{stats['wins']} Losses:{stats['losses']} WR:{winrate:.1f}%<br>Total:{stats['total_pnl_pct']:+.2f}% Avg:{avg:+.2f}%<br>Best:{stats['best_trade']:+.2f}% Worst:{stats['worst_trade']:+.2f}%<br><hr>{hist}"
 
 @app.route('/pnl')
 def send_pnl_now():
@@ -47,8 +48,8 @@ def send_pnl_now():
 def test_telegram():
     if not BOT_TOKEN or not CHAT_ID:
         return "ENV MISSING", 500
-    send_telegram(f"✅ <b>TEST ลิงค์กดได้</b>\n\n📊 ดูสถิติเต็มๆ กดเลย:\n{RENDER_URL}/stats\n\n💰 สั่งสรุป PnL เข้า Telegram กดเลย:\n{RENDER_URL}/pnl")
-    return "Sent with clickable links"
+    send_telegram(f"✅ <b>TEST FUTURES PRICE เป๊ะแล้ว</b>\nตอนนี้ใช้ราคาฟิวเจอร์ Binance Futures\n\n📊 ดูสถิติ: {RENDER_URL}/stats\n💰 สรุป PnL: {RENDER_URL}/pnl")
+    return "Sent futures test"
 
 def send_telegram(msg):
     if not BOT_TOKEN or not CHAT_ID:
@@ -61,20 +62,24 @@ def send_telegram(msg):
 
 def get_price():
     try:
-        r = requests.get(f"{BINANCE_URL}/ticker/price", params={"symbol": SYMBOL}, timeout=10)
+        # FUTURES ticker
+        r = requests.get(f"{BINANCE_FAPI}/ticker/price", params={"symbol": SYMBOL}, timeout=10)
         return float(r.json()['price'])
-    except:
+    except Exception as e:
+        print(f"Price err {e}")
         return None
 
 def get_klines(limit=100):
     try:
-        r = requests.get(f"{BINANCE_URL}/klines", params={"symbol": SYMBOL, "interval": INTERVAL, "limit": limit}, timeout=10)
+        # FUTURES klines
+        r = requests.get(f"{BINANCE_FAPI}/klines", params={"symbol": SYMBOL, "interval": INTERVAL, "limit": limit}, timeout=10)
         data = r.json()
         df = pd.DataFrame(data, columns=['ot','o','h','l','c','v','ct','qav','tr','tb','tq','ig'])
         for col in ['o','h','l','c','v']:
             df[col] = df[col].astype(float)
         return df
-    except:
+    except Exception as e:
+        print(f"Kline err {e}")
         return None
 
 def calc(df):
@@ -112,7 +117,7 @@ def close_position(price, close_type):
     stats["history"].append({"time": datetime.now().strftime("%d/%m %H:%M"), "type": close_type, "entry": avg, "exit": price, "pnl": pnl})
     if len(stats["history"])>50: stats["history"]=stats["history"][-50:]
     winrate = stats["wins"]/stats["total_trades"]*100 if stats["total_trades"]>0 else 0
-    send_telegram(f"✅ <b>{close_type} ปิด +{pnl:.2f}%</b>\nเข้า {avg:.2f} → ออก {price:.2f}\n📊 สะสม: {stats['total_pnl_pct']:+.2f}% ({stats['total_trades']}ไม้ WR {winrate:.1f}%)\n\nดูเต็มๆ: {RENDER_URL}/stats")
+    send_telegram(f"✅ <b>{close_type} ปิด {pnl:+.2f}% [FUTURES]</b>\nเข้า {avg:.2f} → ออก {price:.2f}\n📊 สะสม: {stats['total_pnl_pct']:+.2f}% ({stats['total_trades']}ไม้ WR {winrate:.1f}%)\n\nดูเต็มๆ: {RENDER_URL}/stats")
     positions.clear()
 
 def send_daily_summary(force=False):
@@ -122,13 +127,14 @@ def send_daily_summary(force=False):
     last_daily=time.time()
     if stats["total_trades"]==0:
         if force:
-            send_telegram(f"📊 <b>สรุปกำไร/ขาดทุน V6.3</b>\nยังไม่มีเทรดที่ปิดเลยครับ\n\n📈 ดูสถิติ: {RENDER_URL}/stats\n💰 กดสรุปอีกที: {RENDER_URL}/pnl")
+            send_telegram(f"📊 <b>สรุปกำไร/ขาดทุน FUTURES V6.3</b>\nยังไม่มีเทรดที่ปิดเลยครับ\nราคา: FUTURES Binance (fapi)\n\n📈 ดูสถิติ: {RENDER_URL}/stats\n💰 กดสรุปอีกที: {RENDER_URL}/pnl")
         return
     winrate = stats["wins"]/stats["total_trades"]*100 if stats["total_trades"]>0 else 0
     avg = stats["total_pnl_pct"]/stats["total_trades"] if stats["total_trades"]>0 else 0
     last5 = "\n".join([f"{h['time']} {h['type']} {h['pnl']:+.2f}%" for h in stats["history"][-5:]])
-    msg = f"""📊 <b>สรุปกำไร/ขาดทุน V6.3</b>
+    msg = f"""📊 <b>สรุปกำไร/ขาดทุน FUTURES V6.3</b>
 ⏰ {datetime.now().strftime('%d/%m %H:%M')}
+ราคา: FUTURES Binance Perpetual
 
 💼 ทั้งหมด: {stats['total_trades']} ไม้ ✅{stats['wins']} ❌{stats['losses']} WR {winrate:.1f}%
 💰 สะสม: {stats['total_pnl_pct']:+.2f}% เฉลี่ย {avg:+.2f}%
@@ -146,7 +152,7 @@ def trading_loop():
     global positions, highest, last_hourly
     time.sleep(5)
     if BOT_TOKEN and CHAT_ID:
-        send_telegram(f"🚀 <b>V6.3 FINAL เริ่มรันแล้ว</b>\nSYMBOL: {SYMBOL} {INTERVAL}\nStrategy: BB+STO+SRSI Fast 1.2% Trailing 1.5%/0.8% แก้ไม้ 3\n\n<b>ลิงค์กดดูได้เลย:</b>\n📊 สถิติทั้งหมด: {RENDER_URL}/stats\n💰 สั่งสรุป PnL: {RENDER_URL}/pnl\n\nรายงานชั่วโมง + สรุปกำไรทำงานแล้ว ✅")
+        send_telegram(f"🚀 <b>V6.3 FUTURES เริ่มรันแล้ว เป๊ะๆ</b>\nSYMBOL: {SYMBOL} {INTERVAL}\nราคา: <b>FUTURES Binance fapi</b> ตรงกับพอร์ตฟิวเจอร์\nStrategy: BB+STO+SRSI Fast 1.2% Trailing 1.5%/0.8% แก้ไม้ 3\n\n<b>ลิงค์กดดูได้เลย:</b>\n📊 สถิติ: {RENDER_URL}/stats\n💰 สรุป PnL: {RENDER_URL}/pnl")
     
     while True:
         try:
@@ -171,19 +177,19 @@ def trading_loop():
                     c1="✅" if cond1 else "❌"
                     c2="✅" if cond2 else "❌"
                     c3="✅" if cond3 else "❌"
-                    status=f"⏳ รอสัญญาณ\n{c1} BBล่าง {price:.1f} vs {last['BB_L']:.1f}\n{c2} STO K {last['K']:.1f}\n{c3} SRSI K {last['SR_K']:.1f}"
+                    status=f"⏳ รอสัญญาณ FUTURES\n{c1} BBล่าง {price:.1f} vs {last['BB_L']:.1f}\n{c2} STO K {last['K']:.1f}\n{c3} SRSI K {last['SR_K']:.1f}"
                 else:
                     avg=sum(p['entry']*p['qty'] for p in positions)/sum(p['qty'] for p in positions)
                     pnl=(price-avg)/avg*100
-                    status=f"📊 ถือ {len(positions)}ไม้ PnL {pnl:+.2f}%"
-                msg=f"🕐 <b>ชั่วโมง {SYMBOL}</b> {datetime.now().strftime('%d/%m %H:%M')}\n💰 {price:.2f}$ BB_L {last['BB_L']:.2f} K {last['K']:.1f} SR {last['SR_K']:.1f}\n{status}\n📊 สะสม {stats['total_pnl_pct']:+.2f}% {stats['total_trades']}ไม้ WR {winrate:.1f}%\n\n📈 {RENDER_URL}/stats"
+                    status=f"📊 ถือ {len(positions)}ไม้ PnL {pnl:+.2f}% FUTURES"
+                msg=f"🕐 <b>ชั่วโมง {SYMBOL} FUTURES</b> {datetime.now().strftime('%d/%m %H:%M')}\n💰 {price:.2f}$ (FUT) BB_L {last['BB_L']:.2f} K {last['K']:.1f} SR {last['SR_K']:.1f}\n{status}\n📊 สะสม {stats['total_pnl_pct']:+.2f}% {stats['total_trades']}ไม้ WR {winrate:.1f}%\n\n📈 {RENDER_URL}/stats"
                 send_telegram(msg)
                 send_daily_summary()
 
             if len(positions)==0 and buy_signal:
                 positions.append({'entry': price, 'qty': 1})
                 highest=price
-                send_telegram(f"🟢 <b>LONG SIGNAL PAXG</b>\nราคา: {price:.2f}$\nBB_L: {last['BB_L']:.2f}\nSTO: {last['K']:.1f} > {last['D']:.1f}\nSRSI: {last['SR_K']:.1f} > {last['SR_D']:.1f}\n\n📊 {RENDER_URL}/stats")
+                send_telegram(f"🟢 <b>LONG SIGNAL PAXG FUTURES</b>\nราคา: {price:.2f}$ (FUTURES)\nBB_L: {last['BB_L']:.2f}\nSTO: {last['K']:.1f} > {last['D']:.1f}\nSRSI: {last['SR_K']:.1f} > {last['SR_D']:.1f}\n\n📊 {RENDER_URL}/stats")
 
             if positions:
                 avg=sum(p['entry']*p['qty'] for p in positions)/sum(p['qty'] for p in positions)
@@ -197,7 +203,7 @@ def trading_loop():
                     qty=2**len(positions)
                     positions.append({'entry': price, 'qty': qty})
                     new_avg=sum(p['entry']*p['qty'] for p in positions)/sum(p['qty'] for p in positions)
-                    send_telegram(f"🔧 <b>แก้ไม้ {len(positions)}</b>\nราคา {price:.2f} Qty {qty}\nเฉลี่ยใหม่ {new_avg:.2f}\n\n📊 {RENDER_URL}/stats")
+                    send_telegram(f"🔧 <b>แก้ไม้ {len(positions)} FUTURES</b>\nราคา {price:.2f} Qty {qty}\nเฉลี่ยใหม่ {new_avg:.2f}\n\n📊 {RENDER_URL}/stats")
 
             time.sleep(60)
         except Exception as e:
