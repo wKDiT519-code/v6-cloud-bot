@@ -17,16 +17,12 @@ TP_PCT = 3.2
 SL_PCT = 1.8
 USE_EXCHANGE_SLTP = True
 CANCEL_OLD_SLTP = True
-# === ระบบหยุดเทรดเมื่อแก้ไม้ครบแล้วขาดทุน ===
-MAX_WOODS = 3  # แก้กี่ไม้: 1=10%, 2=20%, 3=40% = รวม 3 ไม้ 70%
-COOLDOWN_HOURS = 4  # หยุดกี่ชั่วโมงเมื่อขาดทุนครบทุกไม้
-# === กัน Funding + ข่าว Non-Farm ===
-MAX_HOLD_HOURS = 96  # ถือได้สูงสุด 4 วัน = 96 ชม. ไม่เกินสัปดาห์ บังคับปิด
-AVOID_FUNDING_MINUTES = 5  # หลีกเลี่ยงเข้าไม้ก่อน funding 5 นาที
-FUNDING_TIMES_UTC = [0, 8, 16]  # MEXC funding 00:00, 08:00, 16:00 UTC
-NEWS_BLACKOUT = True  # เปิดระบบหลีกเลี่ยงข่าว Non-Farm
-NFP_DAYS = ["Fri"]  # Non-Farm ออกวันศุกร์แรกของเดือน 19:30 ICT
-NFP_HOURS_ICT = [(19, 20)]  # หลีกเลี่ยง 19:00-20:30 ICT วันศุกร์แรก
+MAX_WOODS = 3
+COOLDOWN_HOURS = 4
+MAX_HOLD_HOURS = 96
+AVOID_FUNDING_MINUTES = 5
+FUNDING_TIMES_UTC = [0, 8, 16]
+NEWS_BLACKOUT = True
 
 app = Flask(__name__)
 positions, highest, lowest, last_hourly = [], 0, 999999, 0
@@ -41,17 +37,14 @@ def thai_time():
     return datetime.now(pytz.timezone('Asia/Bangkok')).strftime("%d/%m/%Y %H:%M ICT")
 
 def is_funding_time():
-    # เช็คว่าใกล้เวลา funding หรือไม่ (00:00,08:00,16:00 UTC)
     try:
         utc_hour = datetime.now(pytz.timezone('UTC')).hour
         utc_min = datetime.now(pytz.timezone('UTC')).minute
         for fh in FUNDING_TIMES_UTC:
-            # ก่อน funding 5 นาที และหลัง funding 5 นาที ไม่ควรเข้า
             if utc_hour == fh and utc_min >= (60 - AVOID_FUNDING_MINUTES):
                 return True, f"ใกล้ Funding {fh}:00 UTC"
             if utc_hour == fh and utc_min <= AVOID_FUNDING_MINUTES:
                 return True, f"หลัง Funding {fh}:00 UTC"
-            # กรณี 23:55 -> 00:00
             if fh == 0 and utc_hour == 23 and utc_min >= 55:
                 return True, "ใกล้ Funding 00:00 UTC"
         return False, ""
@@ -59,32 +52,21 @@ def is_funding_time():
         return False, ""
 
 def is_news_time():
-    # เช็ค Non-Farm / ข่าวแรง
     if not NEWS_BLACKOUT:
         return False, ""
     try:
         now_th = datetime.now(pytz.timezone('Asia/Bangkok'))
-        # 1. Non-Farm: ศุกร์แรกของเดือน 19:30 ICT
-        # ศุกร์แรก = วันที่ 1-7 และเป็นวันศุกร์
-        if now_th.weekday() == 4 and 1 <= now_th.day <= 7:  # 4 = Friday
+        if now_th.weekday() == 4 and 1 <= now_th.day <= 7:
             if 19 <= now_th.hour <= 20:
-                return True, f"Non-Farm Payroll ศุกร์แรก {now_th.strftime('%d/%m')} 19:30 ICT - ทองกระชาก"
-        # 2. CPI / FOMC มักออก 19:30 ICT ทุกพุธ/พฤหัส - หลีกเลี่ยง 19:00-20:30 ทุกวันที่มีข่าวแรง
-        # ทองกระชากแรงสุด 19:30-20:30 ICT
-        if 19 <= now_th.hour <= 20 and now_th.minute >= 15 and now_th.minute <= 45:
-            # ถือว่ามีความเสี่ยงข่าวทุกวัน 19:30
-            # จะบล็อคเฉพาะถ้าถือไม้อยู่และใกล้ SL/TP ให้ปิดก่อนข่าว
-            pass
+                return True, f"Non-Farm Payroll ศุกร์แรก {now_th.strftime('%d/%m')} 19:30 ICT"
         return False, ""
     except:
         return False, ""
 
 def check_max_hold():
-    # เช็คว่าถือเกิน 4 วันหรือไม่
     if not positions:
         return False
     try:
-        # ใช้เวลา entry ของไม้แรก
         first_entry_time = positions[0].get('time', 0)
         if first_entry_time == 0:
             return False
@@ -95,7 +77,6 @@ def check_max_hold():
     except:
         return False
 
-
 @app.route('/')
 def home():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
@@ -103,7 +84,7 @@ def home():
     if cooldown_until > time.time():
         remain = (cooldown_until - time.time())/3600
         cool_msg = f" | ⏸️ Cooldown {remain:.1f}h"
-    return f"V95 FINAL GOLD BB+STO+RSI+DIV LONG+SHORT SLTP BALANCE COOLDOWN LIVE | Trades:{stats['total_trades']} WR:{wr:.1f}%{cool_msg}"
+    return f"V95 FINAL GOLD BB+STO+RSI+DIV LONG+SHORT SLTP BALANCE COOLDOWN FUNDING/NFP LIVE | Trades:{stats['total_trades']} WR:{wr:.1f}%{cool_msg}"
 
 @app.route('/stats')
 def stats_page():
@@ -112,7 +93,7 @@ def stats_page():
     cool = ""
     if cooldown_until > time.time():
         cool = f"<br>⏸️ หยุดเทรดถึง {datetime.fromtimestamp(cooldown_until).strftime('%H:%M')} เหลือ {(cooldown_until-time.time())/3600:.1f} ชม."
-    return f"<h2>V95 FINAL + COOLDOWN {COOLDOWN_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%{cool}<br><hr>{hist}"
+    return f"<h2>V95 FINAL + FUNDING/NFP + COOLDOWN {COOLDOWN_HOURS}h MAX_HOLD {MAX_HOLD_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%{cool}<br><hr>{hist}"
 
 def send_telegram(msg):
     if not BOT_TOKEN or not CHAT_ID: return
@@ -324,29 +305,24 @@ def close_position(price, typ):
         consecutive_full_losses = 0
     else: 
         stats["losses"]+=1
-        # ถ้าขาดทุนครบทุกไม้ (3 ไม้แล้วขาดทุน) -> นับเป็น full loss
         if num_woods >= MAX_WOODS:
             consecutive_full_losses += 1
-
     stats["history"].append({"time": thai_time(), "type": typ, "entry": avg, "exit": price, "pnl": pnl})
     cancel_all_sltp()
     mexc_close('short' if is_short else 'long')
     bal_msg, _, wr = format_balance_msg()
-
-    # ตรวจสอบต้องหยุดเทรด 4 ชม. หรือไม่
     if pnl < 0 and num_woods >= MAX_WOODS:
         cooldown_until = time.time() + COOLDOWN_HOURS*3600
-        send_telegram(f"✅ [{thai_time()}] {typ} ปิดขาดทุน {pnl:+.2f}% ครบ {num_woods}ไม้ {avg:.2f}->{price:.2f} WR {wr:.1f}%\n{bal_msg}\n⏸️ แก้ครบ {MAX_WOODS}ไม้แล้วยังขาดทุน - หยุดเทรด {COOLDOWN_HOURS} ชม. ถึง {datetime.fromtimestamp(cooldown_until).strftime('%H:%M ICT')}")
+        send_telegram(f"✅ [{thai_time()}] {typ} ปิดขาดทุน {pnl:+.2f}% ครบ {num_woods}ไม้ {avg:.2f}->{price:.2f} WR {wr:.1f}%\n{bal_msg}\n⏸️ แก้ครบ {MAX_WOODS}ไม้แล้วยังขาดทุน - หยุดเทรด {COOLDOWN_HOURS} ชม.")
     else:
         send_telegram(f"✅ [{thai_time()}] {typ} ปิด {pnl:+.2f}% {avg:.2f}->{price:.2f} WR {wr:.1f}% (ใช้ {num_woods}ไม้)\n{bal_msg}")
-
     positions.clear()
 
 def trading_loop():
     global positions, highest, lowest, last_hourly, cooldown_until
     time.sleep(5)
     bal_msg, _, _ = format_balance_msg()
-    send_telegram(f"🚀 [{thai_time()}] V95 FINAL + COOLDOWN เริ่มแล้ว ไม้1=10% ไม้2=20% ไม้3=40% หยุด {COOLDOWN_HOURS}ชม.เมื่อครบ {MAX_WOODS}ไม้แล้วยังขาดทุน\n{bal_msg}")
+    send_telegram(f"🚀 [{thai_time()}] V95 FINAL + COOLDOWN + FUNDING/NFP เริ่มแล้ว ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}")
     while True:
         try:
             price=get_price_mexc()
@@ -372,13 +348,12 @@ def trading_loop():
             short_strong = short_3cond and bear_div
             sell_fast = last['K'] > 78 or last['RSI'] > 75
 
-            # เช็ค Cooldown
             if cooldown_until > time.time():
                 if time.time()-last_hourly >= 3600:
                     last_hourly=time.time()
                     remain = (cooldown_until - time.time())/3600
                     bal_msg, _, _ = format_balance_msg()
-                    send_telegram(f"⏸️ [{thai_time()}] อยู่ในช่วงหยุดเทรด {remain:.1f}ชม. เหลือ {remain:.1f}ชม. | {bal_msg}")
+                    send_telegram(f"⏸️ [{thai_time()}] หยุดเทรด {remain:.1f}ชม. | {bal_msg}")
                 time.sleep(60)
                 continue
 
@@ -395,31 +370,27 @@ def trading_loop():
                     status = f"ถือ {len(positions)}ไม้ PnL {pnl:+.2f}% ({bal_detail['upnl']:+.2f}$) | {bal_msg}"
                 send_telegram(f"[{thai_time()}] {price:.2f}$ {status} BB_L {last['BB_L']:.2f} BB_U {last['BB_U']:.2f} K {last['K']:.1f} RSI {last['RSI']:.1f} BULL={bull_div} BEAR={bear_div}\n{div_detail}")
 
-            # === ระบบกัน Funding + Non-Farm ===
             funding_block, funding_reason = is_funding_time()
             news_block, news_reason = is_news_time()
 
-            # บังคับปิดถ้าถือเกิน 4 วัน (96 ชม.)
             if positions and check_max_hold():
                 bal_msg, _, _ = format_balance_msg()
-                send_telegram(f"⏰ [{thai_time()}] บังคับปิด ถือเกิน {MAX_HOLD_HOURS}ชม. (4วัน) ป้องกัน Funding + ข่าว\n{bal_msg}")
+                send_telegram(f"⏰ [{thai_time()}] บังคับปิด ถือเกิน {MAX_HOLD_HOURS}ชม. ป้องกัน Funding+ข่าว\n{bal_msg}")
                 close_position(price, f"MAX_HOLD_{MAX_HOLD_HOURS}H")
                 continue
 
-            # ถ้าใกล้ Funding หรือ Non-Farm ไม่เปิดไม้ใหม่
             if funding_block or news_block:
                 if time.time()-last_hourly >= 3600:
                     reason = funding_reason or news_reason
                     bal_msg, _, _ = format_balance_msg()
-                    send_telegram(f"⚠️ [{thai_time()}] งดเข้าไม้ใหม่: {reason} - ป้องกัน Funding/ข่าวกระชาก\n{bal_msg}")
+                    send_telegram(f"⚠️ [{thai_time()}] งดเข้า: {reason}\n{bal_msg}")
                     last_hourly = time.time()
-                # ถ้ามีกำไรอยู่ ให้ปิดก่อนข่าว
                 if positions:
                     is_short = any(p.get('qty',0)<0 or p.get('side')=='short' for p in positions)
                     total_qty = sum(abs(p['qty']) for p in positions)
                     avg = sum(p['entry']*abs(p['qty']) for p in positions)/total_qty
                     pnl = (avg-price)/avg*100 if is_short else (price-avg)/avg*100
-                    if pnl > 0.5:  # มีกำไร 0.5% ปิดก่อนข่าว
+                    if pnl > 0.5:
                         send_telegram(f"🛡️ [{thai_time()}] ปิดก่อนข่าว {funding_reason or news_reason} กำไร {pnl:.2f}%")
                         close_position(price, "PRE_NEWS_PROFIT")
                 time.sleep(60)
@@ -462,14 +433,14 @@ def trading_loop():
                     factor=2**len(positions)
                     ok, qty = mexc_buy(price, factor)
                     if ok:
-                        positions.append({'entry': price, 'qty': qty, 'side': 'long'})
+                        positions.append({'entry': price, 'qty': qty, 'side': 'long', 'time': time.time()})
                         bal_msg, _, _ = format_balance_msg()
                         send_telegram(f"🔧 แก้ LONG ไม้{len(positions)} {10*factor if factor<=4 else factor*10}% @ {price:.2f} SL {price*(1-SL_PCT/100):.2f}\n{bal_msg}")
                 elif is_short and price >= positions[-1]['entry']*1.012 and len(positions)<MAX_WOODS and short_3cond:
                     factor=2**len(positions)
                     ok, qty = mexc_sell(price, factor)
                     if ok:
-                        positions.append({'entry': price, 'qty': -qty, 'side': 'short'})
+                        positions.append({'entry': price, 'qty': -qty, 'side': 'short', 'time': time.time()})
                         bal_msg, _, _ = format_balance_msg()
                         send_telegram(f"🔧 แก้ SHORT ไม้{len(positions)} {10*factor if factor<=4 else factor*10}% @ {price:.2f} SL {price*(1+SL_PCT/100):.2f}\n{bal_msg}")
 
