@@ -8,7 +8,7 @@ MEXC_API_SECRET = os.environ.get("MEXC_API_SECRET", "").strip()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 
-SYMBOL = "XAUTUSDT"  # MEXC GOLD(XAUT)
+SYMBOL = "XAUTUSDT"  # MEXC GOLD(XAUT) - ไม่ใช่ PAXG แล้ว
 RENDER_URL = "https://v6-cloud-bot-1.onrender.com"
 INTERVAL = "15m"
 ORDER_PERCENT = 10
@@ -28,16 +28,8 @@ stats = {"total_trades":0,"wins":0,"losses":0,"total_pnl_pct":0.0,"history":[]}
 cooldown_until = 0
 last_near_alert = 0
 
-print("=== V98 INIT ===")
-print(f"BOT_TOKEN set: {bool(BOT_TOKEN)} CHAT_ID set: {bool(CHAT_ID)} MEXC_KEY set: {bool(MEXC_API_KEY)}")
-try:
-    mexc_public = ccxt.mexc({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
-    mexc = ccxt.mexc({'apiKey': MEXC_API_KEY, 'secret': MEXC_API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}}) if MEXC_API_KEY and MEXC_API_SECRET else None
-    print("MEXC ccxt init OK")
-except Exception as e:
-    print(f"MEXC init fail {e}")
-    mexc_public = None
-    mexc = None
+mexc_public = ccxt.mexc({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
+mexc = ccxt.mexc({'apiKey': MEXC_API_KEY, 'secret': MEXC_API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}}) if MEXC_API_KEY and MEXC_API_SECRET else None
 
 def thai_time():
     return datetime.now(pytz.timezone('Asia/Bangkok')).strftime("%d/%m/%Y %H:%M ICT")
@@ -83,52 +75,36 @@ def check_max_hold():
 def home():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     cm = f" | Cooldown {(cooldown_until-time.time())/3600:.1f}h" if cooldown_until>time.time() else ""
-    return f"V98 XAUTUSDT DEBUG LIVE Trades:{stats['total_trades']} WR:{wr:.1f}%{cm} | BOT:{bool(BOT_TOKEN)} CHAT:{bool(CHAT_ID)}"
+    return f"V99 XAUTUSDT FINAL LIVE Trades:{stats['total_trades']} WR:{wr:.1f}%{cm}"
 
 @app.route('/stats')
 def stats_page():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     hist = "".join([f"{h['time']} {h['type']} {h['pnl']:+.2f}%<br>" for h in stats["history"][-20:]])
-    return f"<h2>V98 XAUT DEBUG COOLDOWN {COOLDOWN_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%<br><hr>{hist}"
+    return f"<h2>V99 XAUT FINAL COOLDOWN {COOLDOWN_HOURS}h MAX_HOLD {MAX_HOLD_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%<br><hr>{hist}"
 
 def send_telegram(msg):
-    print(f"TG SEND: {msg[:100]}")
-    if not BOT_TOKEN or not CHAT_ID:
-        print("TG FAIL: No token/chat")
-        return False
+    if not BOT_TOKEN or not CHAT_ID: return
     try:
-        r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode":"HTML", "disable_web_page_preview": True}, timeout=15)
-        print(f"TG RESP: {r.status_code} {r.text[:200]}")
-        return r.status_code==200
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode":"HTML", "disable_web_page_preview": True}, timeout=15)
     except Exception as e:
         print(f"TG err {e}")
-        return False
 
 def get_price_mexc():
     try:
-        if mexc_public:
-            t = mexc_public.fetch_ticker(SYMBOL)
-            price = float(t.get('last') or t.get('close'))
-            print(f"Price via ccxt {price}")
-            return price
-    except Exception as e:
-        print(f"Price ccxt fail {e}")
-    try:
-        r=requests.get("https://contract.mexc.com/api/v1/contract/ticker", params={"symbol":"XAUT_USDT"}, timeout=10)
-        j=r.json()
-        price = float(j['data']['lastPrice'])
-        print(f"Price via contract {price}")
-        return price
-    except Exception as e:
-        print(f"Price contract fail {e}")
-        return None
+        t = mexc_public.fetch_ticker(SYMBOL)
+        return float(t.get('last') or t.get('close'))
+    except:
+        try:
+            r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", params={"symbol": "XAUT_USDT"}, timeout=10)
+            return float(r.json()['data']['lastPrice'])
+        except:
+            return None
 
 def get_klines_mexc(limit=150):
     try:
-        if mexc_public:
-            ohlcv=mexc_public.fetch_ohlcv(SYMBOL, timeframe='15m', limit=limit)
-            print(f"Klines OK {len(ohlcv)}")
-            return pd.DataFrame(ohlcv, columns=['ot','o','h','l','c','v'])
+        ohlcv = mexc_public.fetch_ohlcv(SYMBOL, timeframe='15m', limit=limit)
+        return pd.DataFrame(ohlcv, columns=['ot','o','h','l','c','v'])
     except Exception as e:
         print(f"MEXC Kline err {e}")
         return None
@@ -166,8 +142,7 @@ def check_divergence(df, lookback=20):
 
 def get_balance():
     if not mexc:
-        print("No mexc private - return 0")
-        return 10.0, 10.0, 0.0  # mock for testing
+        return 0, 0, 0
     try:
         bal=mexc.fetch_balance()
         total = float(bal.get('USDT',{}).get('total') or bal.get('total',{}).get('USDT') or 0)
@@ -177,59 +152,46 @@ def get_balance():
             poss = mexc.fetch_positions([SYMBOL])
             for p in poss:
                 upnl += float(p.get('unrealizedPnl') or p.get('unrealisedPnl') or 0)
-        except Exception as e:
-            print(f"pos err {e}")
-        print(f"Balance total={total} free={free} upnl={upnl}")
+        except:
+            pass
         return total, free, upnl
-    except Exception as e:
-        print(f"Balance err {e}")
+    except:
         return 0, 0, 0
 
 def format_balance_msg():
     total, free, upnl = get_balance()
     wr=(stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
-    pnl_txt = f"{upnl:+.2f}$"
-    return f"💰 คงเหลือ {total:.2f}$ | กำไร/ขาดทุน {pnl_txt} | สะสม {stats['total_pnl_pct']:+.2f}% WR {wr:.1f}%", {"total":total,"free":free,"upnl":upnl}, wr
+    return f"💰 คงเหลือ {total:.2f}$ | กำไร/ขาดทุน {upnl:+.2f}$ | สะสม {stats['total_pnl_pct']:+.2f}% WR {wr:.1f}%", {"total":total,"free":free,"upnl":upnl}, wr
 
 def mexc_buy(price,factor):
     if not mexc:
-        print(f"MOCK BUY {factor} @ {price}")
-        send_telegram(f"[{thai_time()}] จำลอง BUY {factor} @ {price:.2f}")
+        send_telegram(f"[{thai_time()}] จำลอง BUY {factor}")
         return True,1
     try:
         try: mexc.set_leverage(LEVERAGE, SYMBOL, {'marginMode':'ISOLATED'})
         except: pass
         total,free,upnl=get_balance()
         bal = total if total>0 else free
-        if bal<1: bal=10
         qty=round(max(bal*(ORDER_PERCENT/100)*factor,5)/price,4)
-        print(f"BUY qty {qty} price {price}")
         mexc.create_market_buy_order(SYMBOL, max(qty,0.001))
-        send_telegram(f"✅ [{thai_time()}] BUY ไม้{factor} @ {price:.2f}")
         return True,qty
     except Exception as e:
-        print(f"BUY Fail {e}")
         send_telegram(f"❌ BUY Fail {e}")
         return False,0
 
 def mexc_sell(price,factor):
     if not mexc:
-        print(f"MOCK SHORT {factor} @ {price}")
-        send_telegram(f"[{thai_time()}] จำลอง SHORT {factor} @ {price:.2f}")
+        send_telegram(f"[{thai_time()}] จำลอง SHORT {factor}")
         return True,1
     try:
         try: mexc.set_leverage(LEVERAGE, SYMBOL, {'marginMode':'ISOLATED'})
         except: pass
         total,free,upnl=get_balance()
         bal = total if total>0 else free
-        if bal<1: bal=10
         qty=round(max(bal*(ORDER_PERCENT/100)*factor,5)/price,4)
-        print(f"SHORT qty {qty} price {price}")
         mexc.create_market_sell_order(SYMBOL, max(qty,0.001))
-        send_telegram(f"✅ [{thai_time()}] SHORT ไม้{factor} @ {price:.2f}")
         return True,qty
     except Exception as e:
-        print(f"SHORT Fail {e}")
         send_telegram(f"❌ SHORT Fail {e}")
         return False,0
 
@@ -268,35 +230,21 @@ def close_position(price,typ):
 
 def trading_loop():
     global positions,highest,lowest,last_hourly,cooldown_until,last_near_alert
-    print("=== TRADING LOOP START ===")
-    time.sleep(2)
-    # TEST TELEGRAM IMMEDIATELY
-    print("Sending test telegram...")
-    send_telegram(f"🚀 [{thai_time()}] V98 DEBUG TEST - บอทตื่นแล้ว! BOT={bool(BOT_TOKEN)} CHAT={bool(CHAT_ID)} SYMBOL={SYMBOL}")
-    time.sleep(2)
-    try:
-        bal_msg,_,_=format_balance_msg()
-        print(f"Balance msg: {bal_msg}")
-        send_telegram(f"🚀 [{thai_time()}] V98 XAUT DEBUG LIVE เริ่มแล้ว SYMBOL={SYMBOL} ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}")
-    except Exception as e:
-        print(f"Start balance err {e}")
-        send_telegram(f"🚀 [{thai_time()}] V98 XAUT DEBUG LIVE เริ่มแล้ว (balance error {e})")
+    time.sleep(5)
+    bal_msg,_,_=format_balance_msg()
+    send_telegram(f"🚀 [{thai_time()}] V99 XAUT FINAL LIVE เริ่มแล้ว SYMBOL={SYMBOL} ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}")
 
     while True:
         try:
-            print(f"--- Loop {thai_time()} ---")
             price=get_price_mexc()
             df=get_klines_mexc()
-            print(f"price={price} df={len(df) if df is not None else None}")
             if not price or df is None or len(df)<60:
-                print("No price/df, sleep 10")
                 time.sleep(10)
                 continue
             df=calc(df)
             last=df.iloc[-1]
             prev=df.iloc[-2]
-            print(f"calc last c={last['c']:.2f} K={last['K']:.1f} RSI={last['RSI']:.1f} BB_L={last['BB_L']:.2f} BB_U={last['BB_U']:.2f}")
-
+            
             bb_low_touch = any(df['c'].iloc[-3:].values <= df['BB_L'].iloc[-3:].values*1.005)
             bb_high_touch = any(df['c'].iloc[-3:].values >= df['BB_U'].iloc[-3:].values*0.995)
             bb_low=bb_low_touch
@@ -306,10 +254,15 @@ def trading_loop():
             short=bb_high and prev['K']>prev['D'] and last['K']<last['D'] and last['K']>50 and last['RSI']>50
             
             bull_div, bear_div, div_detail = check_divergence(df, 20)
-            print(f"buy={buy} short={short} bb_low={bb_low} bb_high={bb_high} bull={bull_div} bear={bear_div}")
 
-            if cooldown_until>time.time():
-                print("In cooldown")
+            near_buy = bb_low_touch and last['K'] < 60 and last['RSI'] < 55 and not buy
+            near_short = bb_high_touch and last['K'] > 40 and last['RSI'] > 45 and not short
+            if (near_buy or near_short) and time.time() - last_near_alert > 900:
+                last_near_alert = time.time()
+                side = "LONG" if near_buy else "SHORT"
+                send_telegram(f"👀 [{thai_time()}] เกือบเข้า {side} {SYMBOL} {price:.2f}$ K {last['K']:.1f} RSI {last['RSI']:.1f} BB_L {last['BB_L']:.2f} BB_U {last['BB_U']:.2f}\nรอครอส Sto")
+
+            if cooldown_until > time.time():
                 time.sleep(15)
                 continue
 
@@ -327,7 +280,6 @@ def trading_loop():
                     side = "SHORT" if is_short else "LONG"
                     status = f"ถือ {pos_count}ไม้ {side} PnL {pnl:+.2f}%"
                 msg = f"⏰ [{thai_time()}] {SYMBOL} {price:.2f}$\n{status}\n💰 คงเหลือ {total:.2f}$ | กำไร/ขาดทุน {pnl_txt}"
-                print(f"Hourly {msg}")
                 send_telegram(msg)
 
             if positions and check_max_hold():
@@ -335,10 +287,12 @@ def trading_loop():
                 continue
 
             if len(positions)==0 and buy:
-                label = "STRONG+DIV" if bull_div else "V98"
+                label = "STRONG+DIV" if bull_div else "V99"
                 ok, qty = mexc_buy(price, 1)
                 if ok:
                     positions.append({'entry': price, 'qty': qty, 'side': 'long', 'time': time.time()})
+                    highest=price
+                    lowest=price
                     total, free, upnl = get_balance()
                     tp = price * (1 + TP_PCT/100)
                     sl = price * (1 - SL_PCT/100)
@@ -347,10 +301,12 @@ def trading_loop():
                     send_telegram(msg)
 
             if len(positions)==0 and short:
-                label = "STRONG+DIV" if bear_div else "V98"
+                label = "STRONG+DIV" if bear_div else "V99"
                 ok, qty = mexc_sell(price, 1)
                 if ok:
                     positions.append({'entry': price, 'qty': -qty, 'side': 'short', 'time': time.time()})
+                    highest=price
+                    lowest=price
                     total, free, upnl = get_balance()
                     tp = price * (1 - TP_PCT/100)
                     sl = price * (1 + SL_PCT/100)
@@ -368,17 +324,32 @@ def trading_loop():
                 sell_fast = last['K'] > 78 or last['RSI'] > 75
                 if pnl>=1.2 and sell_fast:
                     close_position(price, "FAST")
+                elif not is_short and pnl>=1.5 and price <= highest*0.992:
+                    close_position(price, "TRAILING")
+                elif is_short and pnl>=1.5 and price >= lowest*1.008:
+                    close_position(price, "TRAILING_SHORT")
+                elif not is_short and price <= positions[-1]['entry']*0.988 and len(positions)<MAX_WOODS and buy:
+                    factor=2**len(positions)
+                    ok, qty = mexc_buy(price, factor)
+                    if ok:
+                        positions.append({'entry': price, 'qty': qty, 'side': 'long', 'time': time.time()})
+                        total,_,_=get_balance()
+                        send_telegram(f"🔧 แก้ LONG ไม้{len(positions)} @ {price:.2f} คงเหลือ {total:.2f}$")
+                elif is_short and price >= positions[-1]['entry']*1.012 and len(positions)<MAX_WOODS and short:
+                    factor=2**len(positions)
+                    ok, qty = mexc_sell(price, factor)
+                    if ok:
+                        positions.append({'entry': price, 'qty': -qty, 'side': 'short', 'time': time.time()})
+                        total,_,_=get_balance()
+                        send_telegram(f"🔧 แก้ SHORT ไม้{len(positions)} @ {price:.2f} คงเหลือ {total:.2f}$")
 
             time.sleep(15)
         except Exception as e:
             print(f"Loop err {e}")
-            import traceback
-            traceback.print_exc()
             time.sleep(15)
 
 threading.Thread(target=trading_loop, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"Starting Flask on port {port}")
     app.run(host="0.0.0.0", port=port)
