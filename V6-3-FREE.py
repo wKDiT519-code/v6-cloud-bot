@@ -75,13 +75,13 @@ def check_max_hold():
 def home():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     cm = f" | Cooldown {(cooldown_until-time.time())/3600:.1f}h" if cooldown_until>time.time() else ""
-    return f"V96 XAUTUSDT NO-MISS LIVE Trades:{stats['total_trades']} WR:{wr:.1f}%{cm}"
+    return f"V97 XAUTUSDT FIXED LIVE LIVE Trades:{stats['total_trades']} WR:{wr:.1f}%{cm}"
 
 @app.route('/stats')
 def stats_page():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     hist = "".join([f"{h['time']} {h['type']} {h['pnl']:+.2f}%<br>" for h in stats["history"][-20:]])
-    return f"<h2>V96 XAUT FIX NO-MISS COOLDOWN {COOLDOWN_HOURS}h MAX_HOLD {MAX_HOLD_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%<br><hr>{hist}"
+    return f"<h2>V97 XAUT FIXED LIVE COOLDOWN {COOLDOWN_HOURS}h MAX_HOLD {MAX_HOLD_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%<br><hr>{hist}"
 
 def send_telegram(msg):
     if not BOT_TOKEN or not CHAT_ID: return
@@ -243,7 +243,7 @@ def trading_loop():
     global positions,highest,lowest,last_hourly,cooldown_until,last_near_alert
     time.sleep(5)
     bal_msg,_,_=format_balance_msg()
-    send_telegram(f"🚀 [{thai_time()}] V96 XAUT NO-MISS เริ่มแล้ว SYMBOL={SYMBOL} ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}\nแก้พลาด: BB 1.005 K<50 RSI<50 เช็ค 15วิ")
+    send_telegram(f"🚀 [{thai_time()}] V97 XAUT NO-MISS เริ่มแล้ว SYMBOL={SYMBOL} ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}\nแก้พลาด: BB 1.005 K<50 RSI<50 เช็ค 15วิ")
 
     while True:
         try:
@@ -256,16 +256,16 @@ def trading_loop():
             last=df.iloc[-1]
             prev=df.iloc[-2]
             
-            # === V96 FIX: ผ่อน BB จาก 1.0015 -> 1.005 ไม่ให้พลาด ===
+            # === V97 FIX: ผ่อน BB จาก 1.0015 -> 1.005 ไม่ให้พลาด ===
             bb_low_touch = any(df['c'].iloc[-3:].values <= df['BB_L'].iloc[-3:].values*1.005)
             bb_high_touch = any(df['c'].iloc[-3:].values >= df['BB_U'].iloc[-3:].values*0.995)
             bb_low_strict = any(df['c'].iloc[-3:].values <= df['BB_L'].iloc[-3:].values*1.0015)
             
-            # === V96 FIX: ผ่อน RSI/K จาก K<40 RSI<42 -> K<50 RSI<50 ===
+            # === V97 FIX: ผ่อน RSI/K จาก K<40 RSI<42 -> K<50 RSI<50 ===
             sto_cross_up = prev['K'] < prev['D'] and last['K'] > last['D']
             sto_cross_down = prev['K'] > prev['D'] and last['K'] < last['D']
             
-            # เงื่อนไขหลัก V96 - ผ่อนลง
+            # เงื่อนไขหลัก V97 - ผ่อนลง
             buy_main = bb_low_touch and sto_cross_up and last['K'] < 50 and last['RSI'] < 50
             short_main = bb_high_touch and sto_cross_down and last['K'] > 50 and last['RSI'] > 50
             
@@ -311,7 +311,7 @@ def trading_loop():
                 )
                 send_telegram(msg)
 
-            # === V96 FIX: Funding ไม่บล็อค 100% แค่เตือน ===
+            # === V97 FIX: Funding ไม่บล็อค 100% แค่เตือน ===
             funding_block, funding_reason = is_funding_time()
             news_block, news_reason = is_news_time()
             
@@ -327,7 +327,7 @@ def trading_loop():
 
             # เปิด LONG - ตามแบบที่ขอวันนี้ มี TP/SL + คงเหลือ + กำไร/ขาดทุน + วันเวลา
             if len(positions)==0 and buy:
-                label = "STRONG+DIV" if bull_div else "V96"
+                label = "STRONG+DIV" if bull_div else "V97"
                 ok, qty = mexc_buy(price, 1)
                 if ok:
                     positions.append({'entry': price, 'qty': qty, 'side': 'long', 'time': time.time()})
@@ -348,7 +348,7 @@ def trading_loop():
 
             # เปิด SHORT - แบบเดียวกัน
             if len(positions)==0 and short:
-                label = "STRONG+DIV" if bear_div else "V96"
+                label = "STRONG+DIV" if bear_div else "V97"
                 ok, qty = mexc_sell(price, 1)
                 if ok:
                     positions.append({'entry': price, 'qty': -qty, 'side': 'short', 'time': time.time()})
@@ -396,7 +396,7 @@ def trading_loop():
                         total,_,_=get_balance()
                         send_telegram(f"🔧 แก้ SHORT ไม้{len(positions)} @ {price:.2f} คงเหลือ {total:.2f}$")
 
-            time.sleep(15)  # V96 FIX: จาก 60วิ -> 15วิ ไม่ให้พลาดครอส
+            time.sleep(15)  # V97 FIX: จาก 60วิ -> 15วิ ไม่ให้พลาดครอส
         except Exception as e:
             print(f"Loop err {e}")
             time.sleep(15)
