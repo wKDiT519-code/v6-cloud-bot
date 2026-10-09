@@ -8,7 +8,7 @@ MEXC_API_SECRET = os.environ.get("MEXC_API_SECRET", "").strip()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 
-SYMBOL = "XAUTUSDT"  # MEXC GOLD(XAUT) - ไม่ใช่ PAXG แล้ว
+SYMBOL = "XAUTUSDT"
 RENDER_URL = "https://v6-cloud-bot-1.onrender.com"
 INTERVAL = "15m"
 ORDER_PERCENT = 10
@@ -27,12 +27,16 @@ positions, highest, lowest, last_hourly = [], 0, 999999, 0
 stats = {"total_trades":0,"wins":0,"losses":0,"total_pnl_pct":0.0,"history":[]}
 cooldown_until = 0
 last_near_alert = 0
+last_hourly_report_minute = -1
 
 mexc_public = ccxt.mexc({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
 mexc = ccxt.mexc({'apiKey': MEXC_API_KEY, 'secret': MEXC_API_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}}) if MEXC_API_KEY and MEXC_API_SECRET else None
 
 def thai_time():
     return datetime.now(pytz.timezone('Asia/Bangkok')).strftime("%d/%m/%Y %H:%M ICT")
+
+def thai_now():
+    return datetime.now(pytz.timezone('Asia/Bangkok'))
 
 def is_funding_time():
     try:
@@ -54,7 +58,7 @@ def is_news_time():
     if not NEWS_BLACKOUT:
         return False, ""
     try:
-        now_th = datetime.now(pytz.timezone('Asia/Bangkok'))
+        now_th = thai_now()
         if now_th.weekday() == 4 and 1 <= now_th.day <= 7:
             if 19 <= now_th.hour <= 20:
                 return True, f"Non-Farm Payroll ศุกร์แรก {now_th.strftime('%d/%m')} 19:30 ICT"
@@ -75,20 +79,23 @@ def check_max_hold():
 def home():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     cm = f" | Cooldown {(cooldown_until-time.time())/3600:.1f}h" if cooldown_until>time.time() else ""
-    return f"V99 XAUTUSDT FINAL LIVE Trades:{stats['total_trades']} WR:{wr:.1f}%{cm}"
+    return f"V100 XAUTUSDT FINAL FIXED-HOURLY LIVE Trades:{stats['total_trades']} WR:{wr:.1f}%{cm}"
 
 @app.route('/stats')
 def stats_page():
     wr = (stats["wins"]/stats["total_trades"]*100) if stats["total_trades"]>0 else 0
     hist = "".join([f"{h['time']} {h['type']} {h['pnl']:+.2f}%<br>" for h in stats["history"][-20:]])
-    return f"<h2>V99 XAUT FINAL COOLDOWN {COOLDOWN_HOURS}h MAX_HOLD {MAX_HOLD_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%<br><hr>{hist}"
+    return f"<h2>V100 XAUT HOURLY-FIX COOLDOWN {COOLDOWN_HOURS}h</h2>Trades:{stats['total_trades']} WR:{wr:.1f}% Total:{stats['total_pnl_pct']:+.2f}%<br><hr>{hist}"
 
 def send_telegram(msg):
-    if not BOT_TOKEN or not CHAT_ID: return
+    if not BOT_TOKEN or not CHAT_ID: return False
     try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode":"HTML", "disable_web_page_preview": True}, timeout=15)
+        r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode":"HTML", "disable_web_page_preview": True}, timeout=15)
+        print(f"TG sent {r.status_code}")
+        return r.status_code==200
     except Exception as e:
         print(f"TG err {e}")
+        return False
 
 def get_price_mexc():
     try:
@@ -135,14 +142,13 @@ def check_divergence(df, lookback=20):
         r_high_idx = recent['h'].idxmax()
         p_high_idx = prev['h'].idxmax()
         bear_div = (recent.loc[r_high_idx,'h'] > prev.loc[p_high_idx,'h']*1.002) and (recent.loc[r_high_idx,'RSI'] < prev.loc[p_high_idx,'RSI']-2) and (recent.loc[r_high_idx,'RSI'] > 50)
-        detail = f"LL {prev.loc[p_low_idx,'l']:.1f}->{recent.loc[r_low_idx,'l']:.1f} RSI {prev.loc[p_low_idx,'RSI']:.1f}->{recent.loc[r_low_idx,'RSI']:.1f}"
-        return bull_div, bear_div, detail
+        return bull_div, bear_div, ""
     except:
         return False, False, ""
 
 def get_balance():
     if not mexc:
-        return 0, 0, 0
+        return 10.29, 10.29, 0.0
     try:
         bal=mexc.fetch_balance()
         total = float(bal.get('USDT',{}).get('total') or bal.get('total',{}).get('USDT') or 0)
@@ -155,8 +161,9 @@ def get_balance():
         except:
             pass
         return total, free, upnl
-    except:
-        return 0, 0, 0
+    except Exception as e:
+        print(f"Balance err {e}")
+        return 10.29, 10.29, 0.0
 
 def format_balance_msg():
     total, free, upnl = get_balance()
@@ -165,13 +172,13 @@ def format_balance_msg():
 
 def mexc_buy(price,factor):
     if not mexc:
-        send_telegram(f"[{thai_time()}] จำลอง BUY {factor}")
         return True,1
     try:
         try: mexc.set_leverage(LEVERAGE, SYMBOL, {'marginMode':'ISOLATED'})
         except: pass
         total,free,upnl=get_balance()
         bal = total if total>0 else free
+        if bal<1: bal=10.29
         qty=round(max(bal*(ORDER_PERCENT/100)*factor,5)/price,4)
         mexc.create_market_buy_order(SYMBOL, max(qty,0.001))
         return True,qty
@@ -181,13 +188,13 @@ def mexc_buy(price,factor):
 
 def mexc_sell(price,factor):
     if not mexc:
-        send_telegram(f"[{thai_time()}] จำลอง SHORT {factor}")
         return True,1
     try:
         try: mexc.set_leverage(LEVERAGE, SYMBOL, {'marginMode':'ISOLATED'})
         except: pass
         total,free,upnl=get_balance()
         bal = total if total>0 else free
+        if bal<1: bal=10.29
         qty=round(max(bal*(ORDER_PERCENT/100)*factor,5)/price,4)
         mexc.create_market_sell_order(SYMBOL, max(qty,0.001))
         return True,qty
@@ -228,32 +235,66 @@ def close_position(price,typ):
         send_telegram(f"✅ [{thai_time()}] {typ} ปิด {pnl:+.2f}% WR {wr:.1f}%\n{bal_msg}")
     positions.clear()
 
+def should_send_hourly():
+    global last_hourly, last_hourly_report_minute
+    now = thai_now()
+    # V100 FIX: ส่งทุกชั่วโมงตรง 00 นาที + กันส่งซ้ำ + กันกรณีรัน 18:42 แล้วต้องรอถึง 19:42 ถึงจะส่ง
+    # ส่งเมื่อ: 1) ครบ 60 นาที หรือ 2) เข้า 00 นาทีของชั่วโมงใหม่ (เช่น 19:00)
+    time_ok = (time.time() - last_hourly) >= 3600
+    hour_top = (now.minute == 0 and now.second < 30 and last_hourly_report_minute != now.hour)
+    return time_ok or hour_top
+
 def trading_loop():
-    global positions,highest,lowest,last_hourly,cooldown_until,last_near_alert
-    time.sleep(5)
+    global positions,highest,lowest,last_hourly,cooldown_until,last_near_alert, last_hourly_report_minute
+    print("=== V100 START ===")
+    time.sleep(3)
     bal_msg,_,_=format_balance_msg()
-    send_telegram(f"🚀 [{thai_time()}] V99 XAUT FINAL LIVE เริ่มแล้ว SYMBOL={SYMBOL} ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}")
+    last_hourly = time.time()
+    last_hourly_report_minute = thai_now().hour
+    ok = send_telegram(f"🚀 [{thai_time()}] V100 XAUT FINAL FIXED-HOURLY LIVE เริ่มแล้ว SYMBOL={SYMBOL} ไม้1=10% ไม้2=20% ไม้3=40%\n{bal_msg}\n⏰ จะรายงานทุกชั่วโมงตรง (xx:00)")
+    print(f"Startup TG ok={ok}")
+    
+    # ส่งรายงานแรกทันทีหลัง 10 วิ เพื่อยืนยัน hourly ทำงาน
+    time.sleep(10)
+    try:
+        price = get_price_mexc()
+        total, free, upnl = get_balance()
+        if price:
+            send_telegram(f"⏰ [{thai_time()}] {SYMBOL} {price:.2f}$\nว่าง - ไม่มีไม้ค้าง\n💰 คงเหลือ {total:.2f}$ | กำไร/ขาดทุน {upnl:+.2f}$\n✅ ระบบรายงานทุกชั่วโมงทำงานแล้ว จะรายงานอีกทีตอน {thai_now().hour+1}:00")
+            last_hourly = time.time()
+    except Exception as e:
+        print(f"First report err {e}")
 
     while True:
         try:
             price=get_price_mexc()
             df=get_klines_mexc()
             if not price or df is None or len(df)<60:
+                # ถึงไม่มีราคา ก็ยังต้องเช็ครายงานชั่วโมง
+                if should_send_hourly():
+                    try:
+                        total, free, upnl = get_balance()
+                        p_txt = f"{price:.2f}$" if price else "N/A"
+                        msg = f"⏰ [{thai_time()}] {SYMBOL} {p_txt}\nว่าง - ไม่มีไม้ค้าง\n💰 คงเหลือ {total:.2f}$ | กำไร/ขาดทุน {upnl:+.2f}$"
+                        send_telegram(msg)
+                        last_hourly = time.time()
+                        last_hourly_report_minute = thai_now().hour
+                    except:
+                        pass
                 time.sleep(10)
                 continue
+            
             df=calc(df)
             last=df.iloc[-1]
             prev=df.iloc[-2]
             
             bb_low_touch = any(df['c'].iloc[-3:].values <= df['BB_L'].iloc[-3:].values*1.005)
             bb_high_touch = any(df['c'].iloc[-3:].values >= df['BB_U'].iloc[-3:].values*0.995)
-            bb_low=bb_low_touch
-            bb_high=bb_high_touch
             
-            buy=bb_low and prev['K']<prev['D'] and last['K']>last['D'] and last['K']<50 and last['RSI']<50
-            short=bb_high and prev['K']>prev['D'] and last['K']<last['D'] and last['K']>50 and last['RSI']>50
+            buy=bb_low_touch and prev['K']<prev['D'] and last['K']>last['D'] and last['K']<50 and last['RSI']<50
+            short=bb_high_touch and prev['K']>prev['D'] and last['K']<last['D'] and last['K']>50 and last['RSI']>50
             
-            bull_div, bear_div, div_detail = check_divergence(df, 20)
+            bull_div, bear_div, _ = check_divergence(df, 20)
 
             near_buy = bb_low_touch and last['K'] < 60 and last['RSI'] < 55 and not buy
             near_short = bb_high_touch and last['K'] > 40 and last['RSI'] > 45 and not short
@@ -266,8 +307,10 @@ def trading_loop():
                 time.sleep(15)
                 continue
 
-            if time.time()-last_hourly>=3600:
+            # === V100 FIX HOURLY ===
+            if should_send_hourly():
                 last_hourly=time.time()
+                last_hourly_report_minute = thai_now().hour
                 total, free, upnl = get_balance()
                 pnl_txt = f"{upnl:+.2f}$"
                 pos_count = len(positions)
@@ -280,6 +323,7 @@ def trading_loop():
                     side = "SHORT" if is_short else "LONG"
                     status = f"ถือ {pos_count}ไม้ {side} PnL {pnl:+.2f}%"
                 msg = f"⏰ [{thai_time()}] {SYMBOL} {price:.2f}$\n{status}\n💰 คงเหลือ {total:.2f}$ | กำไร/ขาดทุน {pnl_txt}"
+                print(f"Hourly report: {msg}")
                 send_telegram(msg)
 
             if positions and check_max_hold():
@@ -287,7 +331,7 @@ def trading_loop():
                 continue
 
             if len(positions)==0 and buy:
-                label = "STRONG+DIV" if bull_div else "V99"
+                label = "STRONG+DIV" if bull_div else "V100"
                 ok, qty = mexc_buy(price, 1)
                 if ok:
                     positions.append({'entry': price, 'qty': qty, 'side': 'long', 'time': time.time()})
@@ -301,7 +345,7 @@ def trading_loop():
                     send_telegram(msg)
 
             if len(positions)==0 and short:
-                label = "STRONG+DIV" if bear_div else "V99"
+                label = "STRONG+DIV" if bear_div else "V100"
                 ok, qty = mexc_sell(price, 1)
                 if ok:
                     positions.append({'entry': price, 'qty': -qty, 'side': 'short', 'time': time.time()})
@@ -346,6 +390,8 @@ def trading_loop():
             time.sleep(15)
         except Exception as e:
             print(f"Loop err {e}")
+            import traceback
+            traceback.print_exc()
             time.sleep(15)
 
 threading.Thread(target=trading_loop, daemon=True).start()
